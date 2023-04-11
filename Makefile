@@ -318,6 +318,7 @@ help:
 	@echo  'Clean commands:'
 	@echo  '    clean             - Clean applications'
 	@echo  '    clean-deps        - Clean dependencies only'
+	@echo  '    clean-all         - Clean everything'
 	@echo  '    clean-<app>       - Clean application <app>'
 	@echo  ''
 	@echo  'List of applications:'
