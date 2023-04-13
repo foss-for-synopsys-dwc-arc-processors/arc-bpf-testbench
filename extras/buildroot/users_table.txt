@@ -1,0 +1,2 @@
+# <username> <uid> <group> <gid> <password> <home>      <shell>  <groups> <comment>
+ebpf         1000  ebpf    1000  =ebpf      /home/ebpf  /bin/sh  -        eBPF
