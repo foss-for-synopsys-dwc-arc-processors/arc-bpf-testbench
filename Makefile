@@ -179,6 +179,28 @@ DEPENDENCIES := $(LIBBPF_OBJ) $(ZLIB_OBJ) $(LIBELF_OBJ) $(INCLUDE_DIR)/vmlinux.h
 build-deps: $(DEPENDENCIES)
 
 #
+# Tap interface
+#
+
+USE_TAP ?= 0
+
+TAP_NAME := tap1
+TAP_IP_HOST := 10.42.0.1
+TAP_IP_TARGET := 10.42.0.100
+
+tap:
+	$(call msg,CONFIG,tap interface)
+	$(Q)ip tuntap add $(TAP_NAME) mode tap
+	$(Q)ip addr add $(TAP_IP_HOST)/24 dev $(TAP_NAME)
+	$(Q)ip link set $(TAP_NAME) up
+
+ifeq ($(USE_TAP),1)
+ARC_HOSTNAME := arc-tap
+else
+ARC_HOSTNAME := arc
+endif
+
+#
 # Install all programs
 #
 
@@ -208,11 +230,11 @@ clean-$(1):
 ifeq ($(CROSS),1)
 qemu-load-$(1): $(APPS_BIN_DIR)/$(1)
 	$(call msg,LOAD,$$<)
-	$(Q)rsync $$< arc:
+	$(Q)rsync $$< $(ARC_HOSTNAME):
 
 run-$(1): $(APPS_BIN_DIR)/$(1)
 	$(call msg,RUN,$$<)
-	$(Q)ssh -t arc "/root/$(1)"
+	$(Q)ssh -t $(ARC_HOSTNAME) "/root/$(1)"
 else
 run-$(1): $(APPS_BIN_DIR)/$(1)
 	$(call msg,RUN,$$<)
@@ -242,7 +264,7 @@ clean-all: clean-apps clean-deps
 
 ifeq ($(CROSS),1)
 
-LNXIMG  ?= vmlinux
+LNXIMG  ?= linux/build/vmlinux
 GDB     ?= $(TARGET)-gdb
 
 ifeq ($(BITS),64)
@@ -251,34 +273,36 @@ else
 QEMU    ?= qemu-system-arc
 endif
 
-QPORT   := 2000
-NPORT   := 2001
-FTP     := hostfwd=tcp::2021-:21
-SSH     := hostfwd=tcp::2022-:22
-TLN     := hostfwd=tcp::2023-:23
-NC      := hostfwd=tcp::$(NPORT)-:$(NPORT)
-QFLAGS  := -M virt                                            \
-           -nographic                                         \
-           -no-reboot                                         \
-           -global cpu.freq_hz=50000000                       \
-           -cpu archs                                         \
-           -netdev user,id=net0,$(FTP),$(SSH),$(TLN),$(NC)    \
-           -device virtio-net-device,netdev=net0
+QEMU_GDB_PORT := 2000
+
+ifeq ($(USE_TAP),1)
+QEMU_NETDEV := -netdev tap,id=net0,ifname=tap1,script=no,downscript=no
+else
+QEMU_FTP      := hostfwd=tcp::2021-:21
+QEMU_SSH      := hostfwd=tcp::2022-:22
+QEMU_TLN      := hostfwd=tcp::2023-:23
+QEMU_NC       := hostfwd=tcp::2001-:2001
+QEMU_NETDEV := -netdev user,id=net0,$(QEMU_FTP),$(QEMU_SSH),$(QEMU_TLN),$(QEMU_NC)
+endif
+
+QEMU_FLAGS    := -M virt -cpu archs -nographic -no-reboot \
+                 -global cpu.freq_hz=50000000 $(QEMU_NETDEV) \
+                 -device virtio-net-device,netdev=net0
 
 .PHONY: qemu-start qemu-start-gdb qemu-connect qemu-load qemu-setup
 
 qemu-start:
-	$(QEMU) $(QFLAGS) -kernel $(LNXIMG)
+	$(QEMU) $(QEMU_FLAGS) -kernel $(LNXIMG)
 
 qemu-start-gdb:
-	$(QEMU) $(QFLAGS) -kernel $(LNXIMG) -S -gdb tcp::$(QPORT)
+	$(QEMU) $(QEMU_FLAGS) -kernel $(LNXIMG) -S -gdb tcp::$(QEMU_GDB_PORT)
 
 qemu-connect:
 	$(GDB) -tui -q                                            \
 			   -ex "add-auto-load-safe-path $(dir $(LNXIMG))" \
 			   -ex "file $(LNXIMG)"                           \
 			   -ex "set remotetimeout 3000"                   \
-			   -ex "tar rem :$(QPORT)"                        \
+			   -ex "tar rem :$(QEMU_GDB_PORT)"                \
 			   -ex "b bpf_int_jit_compile"                    \
 			   -ex "cont"
 
@@ -286,8 +310,8 @@ qemu-load: $(patsubst %, qemu-load-%, $(APPS))
 
 qemu-setup:
 	$(call msg,QEMU,configure for eBPF)
-	ssh arc "mount -t debugfs debugfs /sys/kernel/debug"
-	ssh arc "sysctl net.core.bpf_jit_enable=1"
+	ssh $(ARC_HOSTNAME) "mount -t debugfs debugfs /sys/kernel/debug"
+	ssh $(ARC_HOSTNAME) "sysctl net.core.bpf_jit_enable=1"
 
 endif
 
@@ -341,6 +365,7 @@ endif
 	@echo  ''
 	@echo  'Common commands:'
 	@echo  '    config            - Show current configuration'
+	@echo  '    tap               - Configure tap interface for QEMU (must be invoked as root)'
 
 config:
 	@echo  'ARCH = $(ARCH)'
