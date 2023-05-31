@@ -54,7 +54,7 @@ int handle_exec(struct trace_event_raw_sched_process_exec *ctx)
 	bpf_get_current_comm(&e->comm, sizeof(e->comm));
 
 	fname_off = ctx->__data_loc_filename & 0xFFFF;
-	bpf_probe_read_str(&e->filename, sizeof(e->filename), (void *)ctx + fname_off);
+	bpf_probe_read_kernel_str(&e->filename, sizeof(e->filename), (void *)ctx + fname_off);
 
 	/* successfully submit it to user-space for post-processing */
 	bpf_ringbuf_submit(e, 0);
