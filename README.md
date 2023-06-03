@@ -212,6 +212,54 @@ Common commands:
     tap               - Configure tap interface for QEMU (must be invoked as root)
 ```
 
+## How to Configure Linux Kernel
+
+This testbench is intended for using prepared configuration files
+for QEMU virtual machine. If you are going to compile the Linux kernel
+for another platform then ensure that these options are turned off/on respectively:
+
+```plain
+General setup -> BPF subsystem
+                 -> [*] Enable bpf() system call
+                 -> [*] Enable BPF Just In Time compiler
+                 -> [ ] Disable unprivileged BPF by default
+General setup -> [*] Control Group support
+                     -> [ Select all but "Debug controller" ]
+General architecture-dependent options -> [*] Kprobes
+Kernel hacking -> Generic Kernel Debugging Instruments
+                  -> [*] Debug Filesystem
+               -> Compile-time checks and compiler options
+                  -> Debug information
+                     -> [*] Generate DWARF Version 5 debuginfo
+                  -> [*] Generate BTF typeinfo
+               -> [*] Tracers
+                      -> [*] Boot-time Tracing support
+                      -> [*] Interrupts-off Latency Tracer
+                      -> [*] Preemption-off Latency Tracer
+                      -> [*] Scheduling Latency Tracer
+                      -> [*] Tracer to detect hardware latencies (like SMIs)
+                      -> [*] OS Noise tracer
+                      -> [*] Timerlat tracer
+                      -> [*] Trace syscalls
+                      -> -*- Create a snapshot trace buffer
+                      -> -*- Allow snapshot to swap per CPU
+[*] Networking support -> Networking options
+                          -> <*> The IPv6 protocol
+                                 -> <*> IPv6: IPv6-in-IPv4 tunnel (SIT driver)
+Device Drivers -> NVME Support
+                  -> [ Select everything ]
+               -> [*] NVMEM Support
+```
+
+After running the kernel it's necessary to perform extra
+steps to enable running and debugging eBPF applications
+(these steps correspond to `make qemu-setup`):
+
+```shell
+mount -t debugfs debugfs /sys/kernel/debug
+sysctl net.core.bpf_jit_enable=1
+```
+
 ## Versions of Submodules
 
 | Library | Tag | Repository |
