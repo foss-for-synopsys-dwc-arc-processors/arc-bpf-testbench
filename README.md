@@ -264,6 +264,6 @@ sysctl net.core.bpf_jit_enable=1
 
 | Library | Tag | Repository |
 | ------- | --- | ---------- |
-| `libbpf`| `v1.1.0` | <https://github.com/libbpf/libbpf> |
+| `libbpf`| `v1.3.0` | <https://github.com/libbpf/libbpf> |
 | `elfutils` | `elfutils-0.189` | <https://sourceware.org/git/elfutils.git> |
-| `zlib` | `v1.2.13` | <https://github.com/madler/zlib> |
+| `zlib` | `v1.3` | <https://github.com/madler/zlib> |
