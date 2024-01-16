@@ -34,8 +34,8 @@ BUILD_DIR := $(ARCH_DIR)/build
 APPS_BUILD_DIR := $(BUILD_DIR)/$(APPS_SRC_DIR_NAME)
 APPS_BIN_DIR := $(ARCH_DIR)/bin
 
-LIB_DIR := $(DEPS_DIR)/lib
-INCLUDE_DIR := $(DEPS_DIR)/include
+LIB_DIR := $(DEPS_DIR)/usr/lib
+INCLUDE_DIR := $(DEPS_DIR)/usr/include
 
 ifeq ($(filter-out %64 %64be %64eb %64le %64el s390x,$(TARGET)),)
 	BITS := 64
@@ -44,7 +44,8 @@ else
 endif
 
 CFLAGS := -g3 -Og -Wall -I$(APPS_BUILD_DIR) -I$(APPS_SRC_DIR) -I$(INCLUDE_DIR)
-LDFLAGS := -lbpf -lelf -lz -L$(LIB_DIR)
+LDFLAGS_STATIC := $(LIB_DIR)/libbpf.a $(LIB_DIR)/libz.a $(LIB_DIR)/libelf.a -L$(LIB_DIR)
+LDFLAGS_SHARED := -lbpf -lz -lelf -L$(LIB_DIR)
 NPROC = $(shell nproc)
 
 ifeq ($(BITS),64)
@@ -84,7 +85,14 @@ else
 CLANG_SYS_INCLUDES := $(call find_includes,$(CLANG))
 endif
 
-CLANG_CFLAGS := -g -O2 -target bpf -D__TARGET_ARCH_$(ARCH) -I$(APPS_SRC_DIR) -I$(INCLUDE_DIR) $(CLANG_SYS_INCLUDES)
+CLANG_CFLAGS := -g -O2 -target bpf -D__TARGET_ARCH_$(ARCH) -Xclang -target-feature -Xclang +alu32 -I$(APPS_SRC_DIR) -I$(INCLUDE_DIR) $(CLANG_SYS_INCLUDES)
+
+#
+# Configure pkgconfig for dependencies
+#
+
+PKG_CONFIG_PATH := $(DEPS_DIR)/usr/lib/pkgconfig
+export PKG_CONFIG_PATH
 
 #
 # zlib
@@ -92,46 +100,70 @@ CLANG_CFLAGS := -g -O2 -target bpf -D__TARGET_ARCH_$(ARCH) -I$(APPS_SRC_DIR) -I$
 
 ZLIB_SRC := $(abspath zlib)
 ZLIB_OBJ := $(abspath $(LIB_DIR)/libz.a)
+ZLIB_SHARED := $(abspath $(LIB_DIR)/libz.so)
 ZLIB_BUILD_DIR := $(BUILD_DIR)/zlib
 
 $(BUILD_DIR)/zlib/Makefile: $(ZLIB_SRC)/configure | $(ZLIB_BUILD_DIR)
 	$(call msg,CONFIG,$@)
-	$(Q)cd $(BUILD_DIR)/zlib && CHOST=$(TARGET) CFLAGS="-g3 -Og -fPIC" $(ZLIB_SRC)/configure --static --prefix="$(DEPS_DIR)"
+	$(Q)cd $(BUILD_DIR)/zlib && CHOST=$(TARGET) CFLAGS="-Og -g3 -fPIC" $(ZLIB_SRC)/configure --prefix=/usr
 
 $(ZLIB_OBJ): $(ZLIB_SRC)/*.c $(ZLIB_SRC)/*.h $(BUILD_DIR)/zlib/Makefile | $(ZLIB_BUILD_DIR)
 	$(call msg,LIB,$@)
-	$(Q)$(MAKE) V=$(V) -j $(NPROC) -C $(BUILD_DIR)/zlib install
+	$(Q)$(MAKE) V=$(V) -j $(NPROC) -C $(BUILD_DIR)/zlib
+	$(Q)$(MAKE) V=$(V) -j $(NPROC) -C $(BUILD_DIR)/zlib DESTDIR="$(DEPS_DIR)" LDCONFIG=true install
+	$(Q)sed -i -e 's|prefix=/usr|prefix=$(DEPS_DIR)/usr|g' $(DEPS_DIR)/usr/lib/pkgconfig/zlib.pc
+
+.PHONY: zlib
+zlib: $(ZLIB_OBJ)
 
 #
 # libelf
 #
 
-LIBELF_SRC := $(abspath elfutils)
+LIBELF_TAR := $(abspath elfutils-0.189.tar.bz2)
+LIBELF_SRC := $(abspath elfutils-0.189)
 LIBELF_OBJ := $(abspath $(LIB_DIR)/libelf.a)
+LIBELF_SHARED := $(abspath $(LIB_DIR)/libelf.so)
 LIBELF_BUILD_DIR := $(BUILD_DIR)/elfutils
 
-$(LIBELF_SRC)/configure: $(LIBELF_SRC)/configure.ac
-	$(call msg,AUTOCONF,$@)
+$(LIBELF_TAR):
+	$(call msg,WGET,$@)
+	$(Q)wget https://sourceware.org/elfutils/ftp/0.189/elfutils-0.189.tar.bz2
+
+$(LIBELF_SRC): $(LIBELF_TAR)
+	$(call msg,SRC,$@)
+	$(Q)tar -xf elfutils-0.189.tar.bz2
 	$(Q)cd $(LIBELF_SRC) && autoreconf -i -f
 
-$(LIBELF_BUILD_DIR)/libelf/Makefile: $(LIBELF_SRC)/configure | $(LIBELF_BUILD_DIR)
+$(LIBELF_BUILD_DIR)/Makefile: $(LIBELF_SRC) $(ZLIB_OBJ) | $(LIBELF_BUILD_DIR)
 	$(call msg,CONFIG,$@)
-	$(Q)cd $(LIBELF_BUILD_DIR) && \
-				CFLAGS="-Og -g3 -fPIC" CXXFLAGS="-Og -g3 -fPIC" CPPFLAGS="-I$(DEPS_DIR)/include" LDFLAGS="-L$(DEPS_DIR)/lib" \
-				$(LIBELF_SRC)/configure \
-					--host=$(TARGET) --target=$(TARGET) --disable-dependency-tracking \
-					--disable-nls --program-prefix="eu-" --disable-libdebuginfod \
-					--disable-debuginfod --without-bzlib --without-lzma --without-zstd \
-					--prefix="$(DEPS_DIR)" --enable-maintainer-mode
+	$(Q)cd $(LIBELF_BUILD_DIR) && CFLAGS="-Og -g3 $(shell PKG_CONFIG_PATH='$(PKG_CONFIG_PATH)' pkg-config --cflags --libs zlib)" \
+		$(LIBELF_SRC)/configure \
+			--host=$(TARGET) \
+			--target=$(TARGET) \
+			--program-prefix=eu- \
+			--disable-libdebuginfod \
+			--disable-debuginfod \
+			--without-bzlib \
+			--without-lzma \
+			--without-zstd \
+			--prefix=/usr \
+			--sysconfdir=/etc \
+			--localstatedir=/var
 
-$(LIBELF_OBJ): $(LIBELF_SRC)/libelf/*.c $(LIBELF_SRC)/libelf/*.h $(LIBELF_BUILD_DIR)/libelf/Makefile $(ZLIB_OBJ) | $(LIBELF_BUILD_DIR)
+$(LIBELF_OBJ): $(LIBELF_BUILD_DIR)/Makefile $(ZLIB_OBJ) | $(LIBELF_BUILD_DIR)
 	$(call msg,LIB,$@)
-	$(Q)make V=$(V) -j $(NPROC) -C $(LIBELF_BUILD_DIR)/libelf install-includeHEADERS install-libLIBRARIES
+	$(Q)make V=$(V) -j $(NPROC) -C $(LIBELF_BUILD_DIR)
+	$(Q)make V=$(V) -j $(NPROC) -C $(LIBELF_BUILD_DIR) DESTDIR="$(DEPS_DIR)" install
+	$(Q)sed -i -e 's|prefix=/usr|prefix=$(DEPS_DIR)/usr|g' $(DEPS_DIR)/usr/lib/pkgconfig/libelf.pc
+	$(Q)sed -i -e 's|prefix=/usr|prefix=$(DEPS_DIR)/usr|g' $(DEPS_DIR)/usr/lib/pkgconfig/libdw.pc
+
+.PHONY: libelf
+libelf: $(LIBELF_OBJ)
 
 #
 # libbpf
 #
-
 
 LIBBPF_SRC := $(abspath libbpf)
 
@@ -147,9 +179,14 @@ LIBBPF_BUILD_DIR := $(BUILD_DIR)/libbpf
 
 $(LIBBPF_OBJ): $(LIBBPF_SRC)/src/*.c $(LIBBPF_SRC)/src/*.h $(LIBBPF_SRC)/src/Makefile $(ZLIB_OBJ) $(LIBELF_OBJ) | $(LIBBPF_BUILD_DIR)
 	$(call msg,LIB,$@)
-	$(Q)BUILD_STATIC_ONLY=y OBJDIR=$(LIBBPF_BUILD_DIR) PREFIX=/ DESTDIR=$(DEPS_DIR) CROSS_COMPILE=$(TOOLCHAIN_PREFIX)g \
-			CFLAGS="-Og -g3 -fPIC" CXXFLAGS="-Og -g3 -fPIC" CPPFLAGS="-I$(DEPS_DIR)/include" LDFLAGS="-L$(DEPS_DIR)/lib" \
-			make V=$(V) -j $(NPROC) -C $(LIBBPF_SRC)/src install install_uapi_headers
+	$(Q)CFLAGS="-Og -g3 $(shell PKG_CONFIG_PATH='$(PKG_CONFIG_PATH)' pkg-config --cflags --libs libelf)" CC=$(CC) \
+		make V=$(V) -j $(NPROC) -C $(LIBBPF_SRC)/src OBJDIR=$(LIBBPF_BUILD_DIR)
+	$(Q)CFLAGS="-Og -g3 $(shell PKG_CONFIG_PATH='$(PKG_CONFIG_PATH)' pkg-config --cflags --libs libelf)" CC=$(CC) \
+		make V=$(V) -j $(NPROC) -C $(LIBBPF_SRC)/src OBJDIR=$(LIBBPF_BUILD_DIR) DESTDIR=$(DEPS_DIR) install install_uapi_headers
+	$(Q)sed -i -e 's|prefix=/usr|prefix=$(DEPS_DIR)/usr|g' $(DEPS_DIR)/usr/lib/pkgconfig/libbpf.pc
+
+.PHONY: libbpf
+libbpf: $(LIBBPF_OBJ)
 
 #
 # Output directories
@@ -219,22 +256,34 @@ $(APPS_BUILD_DIR)/$(1).o: $(APPS_SRC_DIR)/$(1).c $(APPS_BUILD_DIR)/$(1).skel.h $
 
 $(APPS_BIN_DIR)/$(1): $(APPS_BUILD_DIR)/$(1).o | $(APPS_BUILD_DIR) $(APPS_BIN_DIR)
 	$(call msg,BIN,$$@)
-	$(Q)$(CC) $(CFLAGS) $$< $(LDFLAGS) -o $$@
+	$(Q)$(CC) $(CFLAGS) $$< $(LDFLAGS_STATIC) -o $$@
 
-build-$(1): $(APPS_BIN_DIR)/$(1)
+$(APPS_BIN_DIR)/$(1)_shared: $(APPS_BUILD_DIR)/$(1).o | $(APPS_BUILD_DIR) $(APPS_BIN_DIR)
+	$(call msg,BIN,$$@)
+	$(Q)$(CC) $(CFLAGS) $$< $(LDFLAGS_SHARED) -o $$@
+
+build-$(1): $(APPS_BIN_DIR)/$(1) $(APPS_BIN_DIR)/$(1)_shared
 
 clean-$(1):
 	$(call msg,CLEAN,$(1))
-	$(Q)rm -f $(APPS_BIN_DIR)/$(1) $(APPS_BUILD_DIR)/$(1).o $(APPS_BUILD_DIR)/$(1).skel.h $(APPS_BUILD_DIR)/$(1).bpf.o
+	$(Q)rm -f $(APPS_BIN_DIR)/$(1) $(APPS_BIN_DIR)/$(1)_shared $(APPS_BUILD_DIR)/$(1).o $(APPS_BUILD_DIR)/$(1).skel.h $(APPS_BUILD_DIR)/$(1).bpf.o
 
 ifeq ($(CROSS),1)
 qemu-load-$(1): $(APPS_BIN_DIR)/$(1)
-	$(call msg,LOAD,$$<)
-	$(Q)rsync $$< $(ARC_HOSTNAME):
+	$(call msg,LOAD,$$^)
+	$(Q)rsync $$^ $(ARC_HOSTNAME):
+
+qemu-load-$(1)-shared: $(APPS_BIN_DIR)/$(1)_shared
+	$(call msg,LOAD,$$^)
+	$(Q)rsync $$^ $(ARC_HOSTNAME):
 
 run-$(1): $(APPS_BIN_DIR)/$(1)
 	$(call msg,RUN,$$<)
 	$(Q)ssh -t $(ARC_HOSTNAME) "/root/$(1)"
+
+run-$(1)-shared: $(APPS_BIN_DIR)/$(1)_shared
+	$(call msg,RUN,$$<)
+	$(Q)ssh -t $(ARC_HOSTNAME) "/root/$(1)_shared"
 else
 run-$(1): $(APPS_BIN_DIR)/$(1)
 	$(call msg,RUN,$$<)
@@ -306,7 +355,11 @@ qemu-connect:
 			   -ex "b bpf_int_jit_compile"                    \
 			   -ex "cont"
 
-qemu-load: $(patsubst %, qemu-load-%, $(APPS))
+qemu-load: $(patsubst %, qemu-load-%, $(APPS)) $(patsubst %, qemu-load-%-shared, $(APPS))
+
+qemu-libs:
+	$(call msg,QEMU,substitute shared libraries)
+	rsync -cvilr $(LIB_DIR)/*.so* $(ARC_HOSTNAME):/usr/lib/
 
 qemu-setup:
 	$(call msg,QEMU,configure for eBPF)
