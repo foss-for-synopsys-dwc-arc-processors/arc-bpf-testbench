@@ -34,23 +34,22 @@ BUILD_DIR := $(ARCH_DIR)/build
 APPS_BUILD_DIR := $(BUILD_DIR)/$(APPS_SRC_DIR_NAME)
 APPS_BIN_DIR := $(ARCH_DIR)/bin
 
-LIB_DIR := $(DEPS_DIR)/usr/lib
-INCLUDE_DIR := $(DEPS_DIR)/usr/include
-
 ifeq ($(filter-out %64 %64be %64eb %64le %64el s390x,$(TARGET)),)
 	BITS := 64
+	BITS_SUFFIX := 64
 else
 	BITS := 32
+	BITS_SUFFIX :=
 endif
+
+LIB_DIR := $(DEPS_DIR)/usr/lib
+LIB64_DIR := $(DEPS_DIR)/usr/lib$(BITS_SUFFIX)
+INCLUDE_DIR := $(DEPS_DIR)/usr/include
 
 CFLAGS := -g3 -Og -Wall -I$(APPS_BUILD_DIR) -I$(APPS_SRC_DIR) -I$(INCLUDE_DIR)
-LDFLAGS_STATIC := $(LIB_DIR)/libbpf.a $(LIB_DIR)/libz.a $(LIB_DIR)/libelf.a -L$(LIB_DIR)
-LDFLAGS_SHARED := -lbpf -lz -lelf -L$(LIB_DIR)
+LDFLAGS_STATIC := $(LIB64_DIR)/libbpf.a $(LIB_DIR)/libz.a $(LIB_DIR)/libelf.a -L$(LIB_DIR) -L$(LIB64_DIR)
+LDFLAGS_SHARED := -lbpf -lz -lelf -L$(LIB_DIR) -L$(LIB64_DIR)
 NPROC = $(shell nproc)
-
-ifeq ($(BITS),64)
-	LDFLAGS += -L$(LIB_DIR)64
-endif
 
 #
 # Verbosity
@@ -169,12 +168,7 @@ LIBBPF_SRC := $(abspath libbpf)
 
 # libbpf build scripts install libraries to lib or lib64
 # depending on a bitness of the architecture.
-ifeq ($(BITS),64)
-	LIBBPF_OBJ := $(abspath $(LIB_DIR)64/libbpf.a)
-else
-	LIBBPF_OBJ := $(abspath $(LIB_DIR)/libbpf.a)
-endif
-
+LIBBPF_OBJ := $(abspath $(LIB64_DIR)/libbpf.a)
 LIBBPF_BUILD_DIR := $(BUILD_DIR)/libbpf
 
 $(LIBBPF_OBJ): $(LIBBPF_SRC)/src/*.c $(LIBBPF_SRC)/src/*.h $(LIBBPF_SRC)/src/Makefile $(ZLIB_OBJ) $(LIBELF_OBJ) | $(LIBBPF_BUILD_DIR)
@@ -183,7 +177,7 @@ $(LIBBPF_OBJ): $(LIBBPF_SRC)/src/*.c $(LIBBPF_SRC)/src/*.h $(LIBBPF_SRC)/src/Mak
 		make V=$(V) -j $(NPROC) -C $(LIBBPF_SRC)/src OBJDIR=$(LIBBPF_BUILD_DIR)
 	$(Q)CFLAGS="-Og -g3 $(shell PKG_CONFIG_PATH='$(PKG_CONFIG_PATH)' pkg-config --cflags --libs libelf)" CC=$(CC) \
 		make V=$(V) -j $(NPROC) -C $(LIBBPF_SRC)/src OBJDIR=$(LIBBPF_BUILD_DIR) DESTDIR=$(DEPS_DIR) install install_uapi_headers
-	$(Q)sed -i -e 's|prefix=/usr|prefix=$(DEPS_DIR)/usr|g' $(DEPS_DIR)/usr/lib/pkgconfig/libbpf.pc
+	$(Q)sed -i -e 's|prefix=/usr|prefix=$(DEPS_DIR)/usr|g' $(LIB64_DIR)/pkgconfig/libbpf.pc
 
 .PHONY: libbpf
 libbpf: $(LIBBPF_OBJ)
