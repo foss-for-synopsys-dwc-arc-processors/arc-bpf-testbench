@@ -6,7 +6,7 @@
 #define TASK_COMM_LEN 16
 #define MAX_FILENAME_LEN 127
 
-struct event {
+struct __attribute__((packed, aligned(4))) event {
 	int pid;
 	int ppid;
 	unsigned exit_code;
